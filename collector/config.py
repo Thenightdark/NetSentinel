@@ -20,6 +20,8 @@ class CollectorConfig:
     fallback_to_demo: bool = True
     packet_limit: int = 0
     flow_inactivity_timeout_seconds: float = 60.0
+    process_correlation_enabled: bool = False
+    process_refresh_interval_seconds: float = 2.0
     backend_url: str = "http://localhost:8000"
     api_key: str | None = None
     ingest_batch_size: int = 100
@@ -38,6 +40,12 @@ class CollectorConfig:
             packet_limit=max(0, int(os.getenv("NETSENTINEL_PACKET_LIMIT", "0"))),
             flow_inactivity_timeout_seconds=max(
                 0.1, float(os.getenv("NETSENTINEL_FLOW_TIMEOUT_SECONDS", "60"))
+            ),
+            process_correlation_enabled=_env_flag(
+                "NETSENTINEL_PROCESS_CORRELATION_ENABLED"
+            ),
+            process_refresh_interval_seconds=max(
+                0.1, float(os.getenv("NETSENTINEL_PROCESS_REFRESH_SECONDS", "2"))
             ),
             backend_url=os.getenv("NETSENTINEL_BACKEND_URL", "http://localhost:8000"),
             api_key=os.getenv("NETSENTINEL_API_KEY") or None,

@@ -94,7 +94,7 @@ def get_stats_summary(database: Session) -> dict[str, object]:
         "open_alerts": int(
             database.scalar(
                 select(func.count()).select_from(SecurityAlert).where(
-                    func.lower(SecurityAlert.status) == "open"
+                    func.upper(SecurityAlert.status) != "RESOLVED"
                 )
             ) or 0
         ),

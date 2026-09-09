@@ -93,3 +93,25 @@ def test_stop_flushes_remaining_flows() -> None:
     assert finalized[0].packets_sent == 1
     assert tracker.active_flow_count == 0
 
+
+def test_flow_keeps_process_metadata_when_it_becomes_available() -> None:
+    now = datetime.now(timezone.utc)
+    tracker = FlowTracker(inactivity_timeout_seconds=30)
+    tracker.observe(packet(now, 64))
+    tracker.observe(
+        PacketMetadata(
+            **{
+                **packet(now + timedelta(seconds=1), 96).to_dict(),
+                "timestamp": now + timedelta(seconds=1),
+                "process_id": 42,
+                "process_name": "chrome.exe",
+                "executable_name": "chrome.exe",
+            }
+        )
+    )
+
+    flow = tracker.snapshot()[0]
+    assert flow.packets_sent == 2
+    assert flow.process_id == 42
+    assert flow.process_name == "chrome.exe"
+    assert flow.executable_name == "chrome.exe"

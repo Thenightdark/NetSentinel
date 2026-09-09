@@ -8,13 +8,15 @@ import socket
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from backend.models import Host, NetworkFlow
+from backend.models import HistoricalHostMetricBucket, Host, NetworkFlow, SecurityAlert
 from backend.schemas import (
     FlowIngestItem,
     HostDestinationStats,
     HostDetail,
+    HostPortStats,
     HostProtocolStats,
     HostRead,
+    HostTimelinePoint,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -104,6 +106,14 @@ def serialize_host(host: Host, timeout_seconds: float) -> HostRead:
 def get_host_detail(
     database: Session, host: Host, timeout_seconds: float
 ) -> HostDetail:
+    host_filter = or_(
+        NetworkFlow.source_ip == host.ip_address,
+        NetworkFlow.destination_ip == host.ip_address,
+    )
+    alert_filter = or_(
+        SecurityAlert.source_ip == host.ip_address,
+        SecurityAlert.destination_ip == host.ip_address,
+    )
     destination_rows = database.execute(
         select(
             NetworkFlow.destination_ip,
@@ -121,19 +131,55 @@ def get_host_detail(
             func.sum(NetworkFlow.bytes),
             func.count(NetworkFlow.id),
         )
-        .where(
-            or_(
-                NetworkFlow.source_ip == host.ip_address,
-                NetworkFlow.destination_ip == host.ip_address,
-            )
-        )
+        .where(host_filter)
         .group_by(NetworkFlow.protocol)
         .order_by(func.sum(NetworkFlow.bytes).desc())
         .limit(10)
     ).all()
+    port_rows = database.execute(
+        select(
+            NetworkFlow.destination_port,
+            func.sum(NetworkFlow.bytes),
+            func.count(NetworkFlow.id),
+        )
+        .where(
+            NetworkFlow.source_ip == host.ip_address,
+            NetworkFlow.destination_port.is_not(None),
+        )
+        .group_by(NetworkFlow.destination_port)
+        .order_by(func.sum(NetworkFlow.bytes).desc())
+        .limit(10)
+    ).all()
+    recent_flows = list(
+        database.scalars(
+            select(NetworkFlow)
+            .where(host_filter)
+            .order_by(NetworkFlow.last_seen.desc())
+            .limit(10)
+        )
+    )
+    recent_alerts = list(
+        database.scalars(
+            select(SecurityAlert)
+            .where(alert_filter)
+            .order_by(SecurityAlert.timestamp.desc())
+            .limit(10)
+        )
+    )
+    risk_score = int(
+        database.scalar(
+            select(func.max(SecurityAlert.risk_score)).where(
+                alert_filter,
+                func.upper(SecurityAlert.status) != "RESOLVED",
+            )
+        )
+        or 0
+    )
+    activity = _host_activity(database, host.ip_address)
     base = serialize_host(host, timeout_seconds)
     return HostDetail(
         **base.model_dump(),
+        risk_score=risk_score,
         top_destinations=[
             HostDestinationStats(
                 ip_address=destination,
@@ -141,6 +187,14 @@ def get_host_detail(
                 connections=int(connections),
             )
             for destination, total_bytes, connections in destination_rows
+        ],
+        top_destination_ports=[
+            HostPortStats(
+                port=int(port),
+                bytes=int(total_bytes or 0),
+                connections=int(connections),
+            )
+            for port, total_bytes, connections in port_rows
         ],
         most_used_protocols=[
             HostProtocolStats(
@@ -150,7 +204,47 @@ def get_host_detail(
             )
             for protocol, total_bytes, connections in protocol_rows
         ],
+        activity_over_time=activity,
+        recent_flows=recent_flows,
+        recent_alerts=recent_alerts,
     )
+
+
+def _host_activity(database: Session, host_address: str) -> list[HostTimelinePoint]:
+    """Read the host's bounded hourly rollups instead of scanning raw flows."""
+    now = datetime.now(timezone.utc)
+    current_hour = now.replace(minute=0, second=0, microsecond=0)
+    first_hour = current_hour - timedelta(hours=23)
+    rows = database.execute(
+        select(
+            HistoricalHostMetricBucket.bucket_start,
+            HistoricalHostMetricBucket.bytes_uploaded,
+            HistoricalHostMetricBucket.bytes_downloaded,
+            HistoricalHostMetricBucket.flow_count,
+        ).where(
+            HistoricalHostMetricBucket.host_ip == host_address,
+            HistoricalHostMetricBucket.granularity == "hour",
+            HistoricalHostMetricBucket.bucket_start >= first_hour,
+        )
+    ).all()
+    buckets = {
+        first_hour + timedelta(hours=index): {"bytes": 0, "connections": 0}
+        for index in range(24)
+    }
+    for bucket_start, uploaded, downloaded, flow_count in rows:
+        seen = _as_utc(bucket_start)
+        bucket = buckets.get(seen)
+        if bucket is not None:
+            bucket["bytes"] += int(uploaded or 0) + int(downloaded or 0)
+            bucket["connections"] += int(flow_count or 0)
+    return [
+        HostTimelinePoint(
+            timestamp=timestamp,
+            bytes=values["bytes"],
+            connections=values["connections"],
+        )
+        for timestamp, values in buckets.items()
+    ]
 
 
 def _as_utc(value: datetime) -> datetime:

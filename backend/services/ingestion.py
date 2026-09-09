@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from backend.models import Host, IngestBatch, NetworkFlow
 from backend.schemas import FlowIngestRequest
 from backend.services.hosts import track_local_hosts_for_flow
+from backend.services.statistics import record_flow_statistics
 
 
 def ingest_flow_batch(
@@ -24,6 +25,9 @@ def ingest_flow_batch(
             source_port=item.source_port,
             destination_port=item.destination_port,
             protocol=item.protocol,
+            process_id=item.process_id,
+            process_name=item.process_name,
+            executable_name=item.executable_name,
             bytes=item.bytes,
             packet_count=item.packet_count,
             first_seen=item.first_seen,
@@ -33,6 +37,7 @@ def ingest_flow_batch(
         stored_flows.append(flow)
         new_host_ips.update(track_local_hosts_for_flow(database, item, host_cache))
 
+    record_flow_statistics(database, stored_flows)
     database.add(IngestBatch(batch_id=batch_id, flow_count=len(request.flows)))
     try:
         database.commit()

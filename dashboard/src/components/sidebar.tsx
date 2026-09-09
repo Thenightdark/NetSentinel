@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { AuthUser, getCurrentUser, logout } from "@/lib/api";
 
 const links = [
   { href: "/", label: "Overview", mark: "OV" },
@@ -12,6 +14,23 @@ const links = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+
+  useEffect(() => {
+    getCurrentUser().then(setUser).catch(() => setUser(null));
+  }, []);
+
+  async function signOut() {
+    setSigningOut(true);
+    try {
+      await logout();
+    } finally {
+      router.replace("/login");
+      router.refresh();
+    }
+  }
   return (
     <aside className="sidebar">
       <Link href="/" className="brand" aria-label="NetSentinel overview">
@@ -20,7 +39,9 @@ export function Sidebar() {
       </Link>
       <nav className="nav" aria-label="Primary navigation">
         {links.map((link) => {
-          const active = pathname === link.href;
+          const active = link.href === "/"
+            ? pathname === "/"
+            : pathname === link.href || pathname.startsWith(`${link.href}/`);
           return (
             <Link key={link.href} href={link.href} className={active ? "nav-link is-active" : "nav-link"} aria-current={active ? "page" : undefined}>
               <span className="nav-mark" aria-hidden="true">{link.mark}</span>
@@ -29,8 +50,11 @@ export function Sidebar() {
           );
         })}
       </nav>
+      <div className="sidebar-account">
+        <div><strong>{user?.username ?? "Signed in"}</strong><small>{user?.role ?? "dashboard user"}</small></div>
+        <button onClick={signOut} disabled={signingOut} type="button">{signingOut ? "…" : "Logout"}</button>
+      </div>
       <div className="sidebar-foot"><span className="status-dot" />Passive monitoring</div>
     </aside>
   );
 }
-

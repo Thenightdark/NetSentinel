@@ -1,11 +1,16 @@
 from datetime import datetime, timezone
 
-from scapy.all import Ether, IP, IPv6, Raw, TCP, UDP
+from scapy.all import DNS, DNSQR, Ether, IP, IPv6, Raw, TCP, UDP
 
 import pytest
 
 from collector import capture as capture_module
-from collector.capture import CaptureUnavailable, PassivePacketCapture, normalize_packet
+from collector.capture import (
+    CaptureUnavailable,
+    PassivePacketCapture,
+    normalize_dns_metadata,
+    normalize_packet,
+)
 from collector.config import CollectorConfig
 from collector.main import main
 from collector.models import PacketMetadata
@@ -58,6 +63,44 @@ def test_normalizes_ipv6_udp_metadata() -> None:
     assert metadata.source_port == 53000
     assert metadata.destination_port == 53
     assert metadata.tcp_flags is None
+
+
+def test_normalizes_dns_query_without_unrelated_payload() -> None:
+    packet = (
+        IP(src="192.168.1.20", dst="192.168.1.1")
+        / UDP(sport=53000, dport=53)
+        / DNS(id=10, qr=0, qd=DNSQR(qname="Example.COM.", qtype="A"))
+    )
+    packet.time = 1_700_000_000.0
+
+    metadata = normalize_dns_metadata(packet, "Ethernet")
+
+    assert metadata is not None
+    assert metadata.requesting_host == "192.168.1.20"
+    assert metadata.queried_domain == "example.com"
+    assert metadata.query_type == "A"
+    assert metadata.response_status is None
+    assert metadata.is_response is False
+    assert set(metadata.to_dict()) == {
+        "requesting_host", "queried_domain", "timestamp", "query_type",
+        "response_status", "is_response", "network_interface",
+    }
+
+
+def test_normalizes_dns_response_status_for_original_client() -> None:
+    packet = (
+        IP(src="192.168.1.1", dst="192.168.1.20")
+        / UDP(sport=53, dport=53000)
+        / DNS(id=10, qr=1, rcode=3, qd=DNSQR(qname="missing.example", qtype="AAAA"))
+    )
+
+    metadata = normalize_dns_metadata(packet, "Ethernet")
+
+    assert metadata is not None
+    assert metadata.requesting_host == "192.168.1.20"
+    assert metadata.response_status == "NXDOMAIN"
+    assert metadata.query_type == "AAAA"
+    assert metadata.is_response is True
 
 
 def test_ignores_non_ip_packet() -> None:

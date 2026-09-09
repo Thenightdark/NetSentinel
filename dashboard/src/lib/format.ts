@@ -25,6 +25,13 @@ export function formatTime(value: string): string {
   }).format(new Date(value));
 }
 
+export function formatDateTime(value: string): string {
+  return new Intl.DateTimeFormat("en", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
 export function formatRelativeTime(value: string): string {
   const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
   if (seconds < 60) return `${seconds}s ago`;
@@ -44,4 +51,3 @@ export function isLocalAddress(value: string): boolean {
   if (parts.length !== 4 || parts.some(Number.isNaN)) return false;
   return parts[0] === 10 || parts[0] === 127 || (parts[0] === 192 && parts[1] === 168) || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 169 && parts[1] === 254);
 }
-

@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from backend.database.session import SessionLocal
+from backend.services.auth import AUTH_COOKIE_NAME, resolve_session
 from backend.websocket.manager import live_manager
 
 router = APIRouter()
@@ -9,6 +11,13 @@ router = APIRouter()
 
 @router.websocket("/ws/live")
 async def live_stream(websocket: WebSocket) -> None:
+    with SessionLocal() as database:
+        authenticated = resolve_session(
+            database, websocket.cookies.get(AUTH_COOKIE_NAME)
+        )
+    if authenticated is None:
+        await websocket.close(code=1008, reason="Authentication required")
+        return
     await live_manager.connect(websocket)
     await websocket.send_json(
         {

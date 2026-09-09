@@ -41,6 +41,9 @@ class NetworkFlow:
     source_port: int | None
     destination_port: int | None
     protocol: str
+    process_id: int | None = None
+    process_name: str | None = None
+    executable_name: str | None = None
 
     @classmethod
     def from_packet(cls, packet: PacketMetadata) -> "NetworkFlow":
@@ -54,6 +57,9 @@ class NetworkFlow:
             source_port=packet.source_port,
             destination_port=packet.destination_port,
             protocol=packet.protocol,
+            process_id=packet.process_id,
+            process_name=packet.process_name,
+            executable_name=packet.executable_name,
         )
 
     def add_packet(self, packet: PacketMetadata) -> None:
@@ -61,6 +67,10 @@ class NetworkFlow:
         self.last_seen = max(self.last_seen, packet.timestamp)
         self.packets_sent += 1
         self.bytes_sent += packet.packet_size
+        if self.process_id is None and packet.process_id is not None:
+            self.process_id = packet.process_id
+            self.process_name = packet.process_name
+            self.executable_name = packet.executable_name
 
     def summary(self) -> str:
         return (
@@ -68,6 +78,11 @@ class NetworkFlow:
             f"{_endpoint(self.destination_ip, self.destination_port)} "
             f"packets={self.packets_sent} bytes={self.bytes_sent} "
             f"first={self.first_seen.isoformat()} last={self.last_seen.isoformat()}"
+            + (
+                f" process={self.process_name or self.executable_name}({self.process_id})"
+                if self.process_id is not None
+                else ""
+            )
         )
 
 

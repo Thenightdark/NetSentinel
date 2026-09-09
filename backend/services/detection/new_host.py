@@ -11,7 +11,6 @@ class NewHostRule:
         return [
             AlertCandidate(
                 timestamp=observed_at,
-                severity="info",
                 detection_name="new_host",
                 source_ip=host_ip,
                 destination_ip=None,

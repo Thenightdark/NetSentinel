@@ -30,7 +30,6 @@ class BandwidthSpikeRule:
             alerts.append(
                 AlertCandidate(
                     timestamp=observed_at,
-                    severity="medium",
                     detection_name="bandwidth_spike",
                     source_ip=flow.source_ip,
                     destination_ip=flow.destination_ip,

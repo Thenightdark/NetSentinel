@@ -56,7 +56,6 @@ class ConnectionSpikeRule:
             alerts.append(
                 AlertCandidate(
                     timestamp=observed_at,
-                    severity="medium",
                     detection_name="connection_spike",
                     source_ip=source_ip,
                     destination_ip=None,

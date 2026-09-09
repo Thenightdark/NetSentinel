@@ -5,7 +5,8 @@ import threading
 import httpx
 
 from collector.flows import NetworkFlow
-from collector.ingest import FlowIngestionClient
+from collector.ingest import DNSIngestionClient, FlowIngestionClient
+from collector.models import DNSMetadata
 
 
 def flow(size: int = 512) -> NetworkFlow:
@@ -20,6 +21,9 @@ def flow(size: int = 512) -> NetworkFlow:
         source_port=51000,
         destination_port=443,
         protocol="TCP",
+        process_id=42,
+        process_name="chrome.exe",
+        executable_name="chrome.exe",
     )
 
 
@@ -48,6 +52,8 @@ def test_temporary_failure_is_retried_with_same_idempotency_key() -> None:
     second_payload = json.loads(requests[1].content)
     assert first_payload["batch_id"] == second_payload["batch_id"]
     assert first_payload["flows"][0]["bytes"] == 512
+    assert first_payload["flows"][0]["process_id"] == 42
+    assert first_payload["flows"][0]["process_name"] == "chrome.exe"
     assert requests[0].headers["X-API-Key"] == "secret-key"
 
 
@@ -111,3 +117,41 @@ def test_full_queue_does_not_block_capture() -> None:
         assert client.enqueue(flow()) is False
     finally:
         client.stop()
+
+
+def test_dns_metadata_uses_separate_authenticated_ingestion_contract() -> None:
+    requests: list[httpx.Request] = []
+    client = DNSIngestionClient(
+        "http://backend.test",
+        "secret-key",
+        transport=httpx.MockTransport(
+            lambda request: requests.append(request) or httpx.Response(202)
+        ),
+    )
+    observation = DNSMetadata(
+        requesting_host="192.168.1.20",
+        queried_domain="example.com",
+        timestamp=datetime.now(timezone.utc),
+        query_type="A",
+        response_status=None,
+        is_response=False,
+        network_interface="Ethernet",
+    )
+    try:
+        assert client.send_batch([observation]) is True
+    finally:
+        client.stop()
+
+    payload = json.loads(requests[0].content)
+    assert requests[0].url.path == "/api/ingest/dns"
+    assert requests[0].headers["X-API-Key"] == "secret-key"
+    assert payload["observations"] == [
+        {
+            "requesting_host": "192.168.1.20",
+            "queried_domain": "example.com",
+            "timestamp": observation.timestamp.isoformat(),
+            "query_type": "A",
+            "response_status": None,
+            "is_response": False,
+        }
+    ]

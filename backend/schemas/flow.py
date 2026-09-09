@@ -12,6 +12,9 @@ class NetworkFlowRead(BaseModel):
     source_port: int | None
     destination_port: int | None
     protocol: str
+    process_id: int | None
+    process_name: str | None
+    executable_name: str | None
     bytes: int
     packet_count: int
     first_seen: datetime
@@ -23,4 +26,3 @@ class FlowPage(BaseModel):
     total: int
     limit: int
     offset: int
-

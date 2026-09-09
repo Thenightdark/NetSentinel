@@ -19,8 +19,10 @@ class NetworkFlow(Base):
     source_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     destination_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     protocol: Mapped[str] = mapped_column(String(20), index=True)
+    process_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    process_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    executable_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     packet_count: Mapped[int] = mapped_column(BigInteger, default=0)
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-

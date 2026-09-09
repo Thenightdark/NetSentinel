@@ -6,13 +6,16 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from backend.database.base import Base
-from backend.models import NetworkFlow
+from backend.models import NetworkFlow, SecurityAlert
 from backend.services.detection import (
+    AlertCandidate,
     BandwidthSpikeRule,
     ConnectionSpikeRule,
     NewHostRule,
     PortScanRule,
     UnusualDestinationPortRule,
+    score_candidate,
+    severity_for_score,
 )
 
 
@@ -131,10 +134,84 @@ def test_new_host_is_informational_and_passive() -> None:
     alerts = NewHostRule().evaluate({"192.168.1.42"})
 
     assert len(alerts) == 1
-    assert alerts[0].severity == "info"
     assert alerts[0].detection_name == "new_host"
     assert "does not imply malicious activity" in alerts[0].description
     assert alerts[0].evidence == {
         "host_ip": "192.168.1.42",
         "discovery_method": "passive_flow_observation",
+    }
+
+
+@pytest.mark.parametrize(
+    ("score", "severity"),
+    [(0, "INFO"), (20, "LOW"), (40, "MEDIUM"), (60, "HIGH"), (80, "CRITICAL"), (100, "CRITICAL")],
+)
+def test_severity_is_derived_from_documented_score_bands(
+    score: int, severity: str
+) -> None:
+    assert severity_for_score(score) == severity
+
+
+def test_risk_score_has_an_auditable_factor_breakdown(database: Session) -> None:
+    now = datetime.now(timezone.utc)
+    database.add_all(
+        [
+            SecurityAlert(
+                timestamp=now - timedelta(days=index + 1),
+                severity="LOW",
+                risk_score=25,
+                alert_type="historical",
+                source_ip="192.168.1.10",
+                description="Historical alert",
+                evidence={},
+                status="RESOLVED",
+            )
+            for index in range(2)
+        ]
+    )
+    database.commit()
+    scan = AlertCandidate(
+        timestamp=now,
+        detection_name="possible_port_scan",
+        source_ip="192.168.1.10",
+        destination_ip=None,
+        description="Possible port scan",
+        evidence={"unique_destination_ports": 20, "port_threshold": 20},
+    )
+    connection = AlertCandidate(
+        timestamp=now,
+        detection_name="connection_spike",
+        source_ip="192.168.1.10",
+        destination_ip=None,
+        description="Connection spike",
+        evidence={"connections_in_window": 30, "minimum_connections": 30},
+    )
+    bandwidth = AlertCandidate(
+        timestamp=now,
+        detection_name="bandwidth_spike",
+        source_ip="192.168.1.10",
+        destination_ip="8.8.8.8",
+        description="Bandwidth spike",
+        evidence={"bytes": 50_000_000, "threshold_bytes": 50_000_000},
+    )
+
+    assessment = score_candidate(database, scan, [scan, connection, bandwidth])
+
+    assert assessment.score == 75
+    assert assessment.severity == "HIGH"
+    assert assessment.breakdown == {
+        "methodology_version": "1.1",
+        "rule_base": 35,
+        "rule_correlation": 12,
+        "connection_frequency": 8,
+        "unique_ports": 8,
+        "bandwidth_volume": 8,
+        "dns_query_rate": 0,
+        "domain_length": 0,
+        "dns_lookup_failures": 0,
+        "traffic_direction": 0,
+        "previous_alert_history": 4,
+        "distinct_rules_for_source": 3,
+        "previous_alert_count": 2,
+        "total": 75,
     }

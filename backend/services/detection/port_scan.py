@@ -34,7 +34,6 @@ class PortScanRule:
             alerts.append(
                 AlertCandidate(
                     timestamp=observed_at,
-                    severity="medium",
                     detection_name="possible_port_scan",
                     source_ip=source_ip,
                     destination_ip=destinations[0] if len(destinations) == 1 else None,

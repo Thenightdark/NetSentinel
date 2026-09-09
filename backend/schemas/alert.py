@@ -1,6 +1,21 @@
 from datetime import datetime
+from enum import Enum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class AlertSeverity(str, Enum):
+    INFO = "INFO"
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+class AlertStatus(str, Enum):
+    NEW = "NEW"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    RESOLVED = "RESOLVED"
 
 
 class SecurityAlertRead(BaseModel):
@@ -8,13 +23,18 @@ class SecurityAlertRead(BaseModel):
 
     id: int
     timestamp: datetime
-    severity: str
+    severity: AlertSeverity
+    risk_score: int = Field(ge=0, le=100)
     alert_type: str
     source_ip: str | None
     destination_ip: str | None
     description: str
     evidence: dict[str, object]
-    status: str
+    status: AlertStatus
+
+
+class AlertStatusUpdate(BaseModel):
+    status: AlertStatus
 
 
 class AlertPage(BaseModel):

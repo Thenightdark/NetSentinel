@@ -2,8 +2,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 from pydantic import SecretStr
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
@@ -11,7 +12,9 @@ from backend.database.base import Base
 from backend.database.session import get_db
 from backend.config import get_settings
 from backend.main import app
-from backend.models import Host, NetworkFlow, SecurityAlert
+from backend.models import Host, NetworkFlow, SecurityAlert, User
+from backend.services.auth import hash_password
+from backend.services.statistics import record_flow_statistics
 
 
 @pytest.fixture
@@ -29,12 +32,28 @@ def database() -> Session:
 
 
 @pytest.fixture
-def client(database: Session) -> TestClient:
+def client(database: Session, monkeypatch) -> TestClient:
     def override_database():
         yield database
 
     app.dependency_overrides[get_db] = override_database
+    monkeypatch.setattr(get_settings(), "auth_secret", SecretStr("test-dashboard-auth-secret-that-is-long"))
+    monkeypatch.setattr("backend.websocket.routes.SessionLocal", lambda: database)
+    database.add(
+        User(
+            username="analyst",
+            password_hash=hash_password("correct-horse-battery-staple"),
+            role="admin",
+            is_active=True,
+        )
+    )
+    database.commit()
     with TestClient(app) as test_client:
+        login = test_client.post(
+            "/api/auth/login",
+            json={"username": "analyst", "password": "correct-horse-battery-staple"},
+        )
+        assert login.status_code == 200
         yield test_client
     app.dependency_overrides.clear()
 
@@ -54,28 +73,30 @@ def stub_hostname_lookup(monkeypatch) -> None:
 @pytest.fixture
 def seeded_database(database: Session) -> Session:
     now = datetime.now(timezone.utc)
-    database.add_all(
-        [
-            Host(ip_address="192.0.2.10", hostname="workstation", first_seen=now, last_seen=now),
+    records = [
+            Host(ip_address="192.168.1.10", hostname="workstation", first_seen=now, last_seen=now),
             Host(ip_address="198.51.100.20", hostname=None, first_seen=now, last_seen=now),
             NetworkFlow(
-                source_ip="192.0.2.10", destination_ip="198.51.100.20",
+                source_ip="192.168.1.10", destination_ip="198.51.100.20",
                 source_port=51000, destination_port=443, protocol="TCP",
                 bytes=1500, packet_count=12,
                 first_seen=now - timedelta(minutes=5), last_seen=now,
             ),
             NetworkFlow(
-                source_ip="192.0.2.10", destination_ip="203.0.113.53",
+                source_ip="192.168.1.10", destination_ip="203.0.113.53",
                 source_port=53000, destination_port=53, protocol="UDP",
                 bytes=240, packet_count=2,
                 first_seen=now - timedelta(hours=3), last_seen=now - timedelta(hours=3),
             ),
             SecurityAlert(
-                timestamp=now, severity="high", alert_type="port_scan",
-                source_ip="192.0.2.50", destination_ip="192.0.2.10",
-                description="Multiple destination ports observed", status="open",
+                timestamp=now, severity="HIGH", risk_score=70, alert_type="port_scan",
+                source_ip="192.0.2.50", destination_ip="192.168.1.10",
+                description="Multiple destination ports observed", status="NEW",
             ),
         ]
+    database.add_all(records)
+    record_flow_statistics(
+        database, [item for item in records if isinstance(item, NetworkFlow)]
     )
     database.commit()
     return database
@@ -99,6 +120,9 @@ def ingest_payload() -> dict[str, object]:
                 "source_port": 51000,
                 "destination_port": 443,
                 "protocol": "tcp",
+                "process_id": 42,
+                "process_name": "chrome.exe",
+                "executable_name": "chrome.exe",
                 "bytes": 2048,
                 "packet_count": 16,
                 "first_seen": (now - timedelta(seconds=5)).isoformat(),
@@ -140,7 +164,7 @@ def test_hosts_can_be_searched(client: TestClient, seeded_database: Session) -> 
     response = client.get("/api/hosts", params={"search": "work"})
     assert response.status_code == 200
     assert response.json()["total"] == 1
-    assert response.json()["items"][0]["ip_address"] == "192.0.2.10"
+    assert response.json()["items"][0]["ip_address"] == "192.168.1.10"
 
 
 def test_host_detail_includes_destination_and_protocol_statistics(
@@ -159,6 +183,15 @@ def test_host_detail_includes_destination_and_protocol_statistics(
     assert body["most_used_protocols"][0] == {
         "protocol": "TCP", "bytes": 1500, "connections": 1
     }
+    assert body["risk_score"] == 70
+    assert body["top_destination_ports"][0] == {
+        "port": 443, "bytes": 1500, "connections": 1
+    }
+    assert len(body["activity_over_time"]) == 24
+    assert sum(point["bytes"] for point in body["activity_over_time"]) == 1740
+    assert sum(point["connections"] for point in body["activity_over_time"]) == 2
+    assert [flow["destination_port"] for flow in body["recent_flows"]] == [443, 53]
+    assert body["recent_alerts"][0]["risk_score"] == 70
 
 
 def test_missing_host_detail_returns_404(client: TestClient) -> None:
@@ -189,7 +222,7 @@ def test_hosts_can_be_filtered_by_activity(
 
 
 def test_alerts_can_be_filtered(client: TestClient, seeded_database: Session) -> None:
-    response = client.get("/api/alerts", params={"severity": "HIGH", "status": "open"})
+    response = client.get("/api/alerts", params={"severity": "HIGH", "status": "NEW"})
     assert response.status_code == 200
     assert response.json()["total"] == 1
     assert response.json()["items"][0]["alert_type"] == "port_scan"
@@ -243,6 +276,11 @@ def test_ingestion_validates_persists_and_deduplicates_batch(
     assert summary["hosts"] == 2
     assert summary["total_bytes"] == 2048
 
+    stored_flow = client.get("/api/flows").json()["items"][0]
+    assert stored_flow["process_id"] == 42
+    assert stored_flow["process_name"] == "chrome.exe"
+    assert stored_flow["executable_name"] == "chrome.exe"
+
     hosts = client.get("/api/hosts").json()["items"]
     assert {host["ip_address"] for host in hosts} == {"192.168.1.10", "10.0.0.20"}
     assert all(host["total_bytes"] == 2048 for host in hosts)
@@ -251,7 +289,8 @@ def test_ingestion_validates_persists_and_deduplicates_batch(
 
     alerts = client.get("/api/alerts", params={"alert_type": "new_host"}).json()
     assert alerts["total"] == 2
-    assert {alert["severity"] for alert in alerts["items"]} == {"info"}
+    assert {alert["severity"] for alert in alerts["items"]} == {"INFO"}
+    assert all(0 <= alert["risk_score"] <= 100 for alert in alerts["items"])
     assert {
         alert["evidence"]["discovery_method"] for alert in alerts["items"]
     } == {"passive_flow_observation"}
@@ -289,6 +328,35 @@ def test_ingestion_rejects_invalid_flow_times(
     assert response.status_code == 422
 
 
+def test_alert_status_can_be_updated(
+    client: TestClient, seeded_database: Session
+) -> None:
+    alert_id = client.get("/api/alerts").json()["items"][0]["id"]
+
+    acknowledged = client.patch(
+        f"/api/alerts/{alert_id}/status", json={"status": "ACKNOWLEDGED"}
+    )
+    resolved = client.patch(
+        f"/api/alerts/{alert_id}/status", json={"status": "RESOLVED"}
+    )
+
+    assert acknowledged.status_code == 200
+    assert acknowledged.json()["status"] == "ACKNOWLEDGED"
+    assert resolved.status_code == 200
+    assert resolved.json()["status"] == "RESOLVED"
+    assert client.get("/api/stats/summary").json()["open_alerts"] == 0
+
+
+def test_alert_status_update_validates_state_and_missing_alert(
+    client: TestClient,
+) -> None:
+    invalid = client.patch("/api/alerts/1/status", json={"status": "OPEN"})
+    missing = client.patch("/api/alerts/999/status", json={"status": "NEW"})
+
+    assert invalid.status_code == 422
+    assert missing.status_code == 404
+
+
 def test_live_websocket_connects_and_responds_to_ping(client: TestClient) -> None:
     with client.websocket_connect("/ws/live") as websocket:
         ready = websocket.receive_json()
@@ -298,6 +366,63 @@ def test_live_websocket_connects_and_responds_to_ping(client: TestClient) -> Non
     assert ready["type"] == "connection.ready"
     assert heartbeat["type"] == "connection.heartbeat"
     assert heartbeat["message"] == "pong"
+
+
+def test_dashboard_authentication_and_collector_key_are_separate(
+    client: TestClient, database: Session, ingest_api_key: str
+) -> None:
+    stored_user = database.scalar(select(User).where(User.username == "analyst"))
+    assert stored_user is not None
+    assert stored_user.password_hash != "correct-horse-battery-staple"
+    assert stored_user.password_hash.startswith("$argon2")
+
+    original_token = client.cookies.get("netsentinel_session")
+    assert original_token is not None
+    logged_out = client.post("/api/auth/logout")
+    assert logged_out.status_code == 200
+    for protected_path in (
+        "/api/flows",
+        "/api/hosts",
+        "/api/alerts",
+        "/api/dns",
+        "/api/stats/summary",
+    ):
+        assert client.get(protected_path).status_code == 401
+    client.cookies.set("netsentinel_session", original_token)
+    assert client.get("/api/flows").status_code == 401
+    client.cookies.clear()
+    assert client.get("/api/health").status_code == 200
+
+    payload = ingest_payload()
+    payload["batch_id"] = "10a2ba58-f9df-4889-b0ad-7499376c3314"
+    ingested = client.post(
+        "/api/ingest/flows",
+        json=payload,
+        headers={"X-API-Key": ingest_api_key},
+    )
+    assert ingested.status_code == 202
+    assert client.get("/api/flows", headers={"X-API-Key": ingest_api_key}).status_code == 401
+
+    rejected = client.post(
+        "/api/auth/login", json={"username": "analyst", "password": "wrong-password"}
+    )
+    accepted = client.post(
+        "/api/auth/login",
+        json={"username": "ANALYST", "password": "correct-horse-battery-staple"},
+    )
+    assert rejected.status_code == 401
+    assert accepted.status_code == 200
+    assert accepted.json()["user"]["role"] == "admin"
+    assert "HttpOnly" in accepted.headers["set-cookie"]
+    assert client.get("/api/auth/me").json()["username"] == "analyst"
+
+
+def test_live_websocket_requires_dashboard_session(client: TestClient) -> None:
+    client.cookies.clear()
+    with pytest.raises(WebSocketDisconnect) as rejected:
+        with client.websocket_connect("/ws/live"):
+            pass
+    assert rejected.value.code == 1008
 
 
 def test_ingested_flows_emit_throttled_live_update(

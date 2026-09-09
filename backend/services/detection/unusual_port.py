@@ -26,7 +26,6 @@ class UnusualDestinationPortRule:
             alerts.append(
                 AlertCandidate(
                     timestamp=observed_at,
-                    severity="medium",
                     detection_name="unusual_destination_port",
                     source_ip=flow.source_ip,
                     destination_ip=flow.destination_ip,

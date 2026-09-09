@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Sidebar } from "@/components/sidebar";
+import { AppShell } from "@/components/app-shell";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -8,5 +8,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body><div className="app-shell"><Sidebar /><div className="workspace"><div className="mobile-bar"><span className="mobile-brand">NetSentinel</span></div><main className="page">{children}</main></div></div></body></html>;
+  return <html lang="en"><body><AppShell>{children}</AppShell></body></html>;
 }
