@@ -3,7 +3,7 @@
 NetSentinel uses two deliberately separate authentication mechanisms:
 
 - Human dashboard users sign in with a username and password. Passwords are stored only as Argon2 hashes produced by `pwdlib`. Successful login creates an expiring JWT in an HTTP-only, same-site cookie and a corresponding database session. Logout revokes that database session.
-- The passive collector continues to use only its `X-API-Key` ingestion credential. A dashboard session cannot authenticate an ingestion request, and a collector API key cannot access dashboard data.
+- Each passive collector uses its own generated `X-Agent-ID` and `X-API-Key` credential. The shared enrollment key is used only to register new collectors. A dashboard session cannot authenticate ingestion, and collector credentials cannot access dashboard data.
 
 ## Initial administrator
 
@@ -13,7 +13,7 @@ The `users` table includes an active flag and role, and sessions reference a use
 
 ## Secrets and cookies
 
-Generate different values for `NETSENTINEL_AUTH_SECRET` and `NETSENTINEL_API_KEY`:
+Generate different values for `NETSENTINEL_AUTH_SECRET` and `NETSENTINEL_AGENT_ENROLLMENT_KEY`:
 
 ```shell
 python -c "import secrets; print(secrets.token_urlsafe(48))"

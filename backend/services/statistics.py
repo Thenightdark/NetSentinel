@@ -32,7 +32,7 @@ RANGE_SPECS: dict[HistoryRange, RollupSpec] = {
 
 def record_flow_statistics(database: Session, flows: list[NetworkFlow]) -> None:
     bucket_cache: dict[tuple[str, datetime], HistoricalMetricBucket] = {}
-    host_bucket_cache: dict[tuple[str, str, datetime], HistoricalHostMetricBucket] = {}
+    host_bucket_cache: dict[tuple[str | None, str, str, datetime], HistoricalHostMetricBucket] = {}
     for flow in flows:
         local_hosts = {
             address
@@ -49,7 +49,7 @@ def record_flow_statistics(database: Session, flows: list[NetworkFlow]) -> None:
             bucket.flow_count += 1
             for host_address in local_hosts:
                 host_bucket, created = _get_host_bucket(
-                    database, spec, start, host_address, host_bucket_cache
+                    database, spec, start, host_address, flow.agent_id, host_bucket_cache
                 )
                 if created:
                     bucket.active_hosts += 1
@@ -157,14 +157,16 @@ def _get_host_bucket(
     spec: RollupSpec,
     start: datetime,
     host_address: str,
-    cache: dict[tuple[str, str, datetime], HistoricalHostMetricBucket],
+    agent_id: str | None,
+    cache: dict[tuple[str | None, str, str, datetime], HistoricalHostMetricBucket],
 ) -> tuple[HistoricalHostMetricBucket, bool]:
-    key = (host_address, spec.granularity, start)
+    key = (agent_id, host_address, spec.granularity, start)
     if key in cache:
         return cache[key], False
     bucket = database.scalar(
         select(HistoricalHostMetricBucket).where(
             HistoricalHostMetricBucket.host_ip == host_address,
+            HistoricalHostMetricBucket.agent_id == agent_id,
             HistoricalHostMetricBucket.granularity == spec.granularity,
             HistoricalHostMetricBucket.bucket_start == start,
         ).with_for_update()
@@ -172,6 +174,7 @@ def _get_host_bucket(
     created = bucket is None
     if bucket is None:
         bucket = HistoricalHostMetricBucket(
+            agent_id=agent_id,
             host_ip=host_address,
             granularity=spec.granularity,
             bucket_start=start,

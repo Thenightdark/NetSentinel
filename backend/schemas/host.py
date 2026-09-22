@@ -10,6 +10,7 @@ class HostRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    agent_id: str | None
     ip_address: str
     hostname: str | None
     first_seen: datetime

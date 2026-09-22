@@ -7,6 +7,7 @@ class NetworkFlowRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    agent_id: str | None
     source_ip: str
     destination_ip: str
     source_port: int | None

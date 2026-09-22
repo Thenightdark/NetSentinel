@@ -18,11 +18,13 @@ class PortScanRule:
     ) -> list[AlertCandidate]:
         observed_at = now or datetime.now(timezone.utc)
         cutoff = observed_at - timedelta(seconds=self.window_seconds)
+        agent_id = flows[0].agent_id
         alerts: list[AlertCandidate] = []
         for source_ip in {flow.source_ip for flow in flows}:
             rows = database.execute(
                 select(NetworkFlow.destination_port, NetworkFlow.destination_ip).where(
                     NetworkFlow.source_ip == source_ip,
+                    NetworkFlow.agent_id == agent_id,
                     NetworkFlow.destination_port.is_not(None),
                     NetworkFlow.last_seen >= cutoff,
                 )

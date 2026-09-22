@@ -9,7 +9,7 @@ from backend.schemas import DNSIngestRequest, TopDomain
 
 
 def ingest_dns_batch(
-    database: Session, request: DNSIngestRequest
+    database: Session, request: DNSIngestRequest, agent_id: str | None = None
 ) -> tuple[int, bool, list[DNSObservation]]:
     batch_id = str(request.batch_id)
     existing = database.get(DNSIngestBatch, batch_id)
@@ -18,6 +18,7 @@ def ingest_dns_batch(
 
     observations = [
         DNSObservation(
+            agent_id=agent_id,
             requesting_host=str(item.requesting_host),
             queried_domain=item.queried_domain,
             timestamp=item.timestamp,

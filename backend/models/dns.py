@@ -14,6 +14,7 @@ class DNSObservation(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     requesting_host: Mapped[str] = mapped_column(String(45), index=True)
     queried_domain: Mapped[str] = mapped_column(String(253), index=True)
     timestamp: Mapped[datetime] = mapped_column(

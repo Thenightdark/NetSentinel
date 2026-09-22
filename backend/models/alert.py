@@ -10,6 +10,7 @@ class SecurityAlert(Base):
     __tablename__ = "security_alerts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
     )

@@ -43,6 +43,7 @@ def score_candidate(
     database: Session,
     candidate: AlertCandidate,
     correlated_candidates: list[AlertCandidate],
+    agent_id: str | None = None,
 ) -> RiskAssessment:
     """Score a finding using documented, bounded, auditable components."""
     base_points = RULE_BASE_POINTS[candidate.detection_name]
@@ -91,6 +92,7 @@ def score_candidate(
     previous_alerts = int(
         database.scalar(
             select(func.count()).select_from(SecurityAlert).where(
+                SecurityAlert.agent_id == agent_id,
                 SecurityAlert.source_ip == candidate.source_ip
             )
         )

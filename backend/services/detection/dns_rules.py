@@ -21,6 +21,7 @@ class HighDNSQueryRateRule:
     ) -> list[AlertCandidate]:
         observed_at = now or datetime.now(timezone.utc)
         cutoff = observed_at - timedelta(seconds=self.window_seconds)
+        agent_id = observations[0].agent_id
         clients = {
             item.requesting_host for item in observations if not item.is_response
         }
@@ -30,6 +31,7 @@ class HighDNSQueryRateRule:
                 database.scalar(
                     select(func.count()).select_from(DNSObservation).where(
                         DNSObservation.requesting_host == client,
+                        DNSObservation.agent_id == agent_id,
                         DNSObservation.is_response.is_(False),
                         DNSObservation.timestamp >= cutoff,
                     )
@@ -111,6 +113,7 @@ class RepeatedFailedDNSLookupRule:
     ) -> list[AlertCandidate]:
         observed_at = now or datetime.now(timezone.utc)
         cutoff = observed_at - timedelta(seconds=self.window_seconds)
+        agent_id = observations[0].agent_id
         keys = {
             (item.requesting_host, item.queried_domain)
             for item in observations
@@ -122,6 +125,7 @@ class RepeatedFailedDNSLookupRule:
                 database.scalar(
                     select(func.count()).select_from(DNSObservation).where(
                         DNSObservation.requesting_host == client,
+                        DNSObservation.agent_id == agent_id,
                         DNSObservation.queried_domain == domain,
                         DNSObservation.is_response.is_(True),
                         DNSObservation.response_status.is_not(None),

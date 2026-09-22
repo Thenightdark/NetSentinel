@@ -7,6 +7,7 @@ from backend.api.router import api_router
 from backend.config import get_settings
 from backend.database.session import SessionLocal
 from backend.services.auth import bootstrap_initial_admin
+from backend.services.notifications import get_notification_manager
 from backend.websocket.routes import router as websocket_router
 from backend.websocket.manager import live_manager
 
@@ -19,6 +20,8 @@ async def lifespan(_: FastAPI):
         with SessionLocal() as database:
             bootstrap_initial_admin(database)
     yield
+    get_notification_manager().close()
+    get_notification_manager.cache_clear()
     await live_manager.close()
 
 

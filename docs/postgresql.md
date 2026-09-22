@@ -4,7 +4,7 @@ PostgreSQL is NetSentinel's application database. SQLAlchemy remains the data-ac
 
 ## Development configuration
 
-Copy `.env.example` to `.env`, then replace `POSTGRES_PASSWORD` and `NETSENTINEL_API_KEY`. The checked-in values are visible development placeholders, not credentials suitable for a shared or internet-accessible environment.
+Copy `.env.example` to `.env`, then replace `POSTGRES_PASSWORD` and `NETSENTINEL_AGENT_ENROLLMENT_KEY`. The checked-in values are visible development placeholders, not credentials suitable for a shared or internet-accessible environment.
 
 Docker Compose builds the SQLAlchemy connection URL from `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD`. When FastAPI runs directly on the host, it uses `DATABASE_URL` instead.
 

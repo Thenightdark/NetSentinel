@@ -15,6 +15,7 @@ def flows(
     protocol: str | None = None,
     source_ip: str | None = None,
     destination_ip: str | None = None,
+    agent_id: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     database: Session = Depends(get_db),
@@ -26,6 +27,7 @@ def flows(
         protocol=protocol,
         source_ip=source_ip,
         destination_ip=destination_ip,
+        agent_id=agent_id,
     )
     return FlowPage(items=items, total=total, limit=limit, offset=offset)
 
@@ -34,6 +36,7 @@ def flows(
 def recent_flows(
     minutes: int = Query(60, ge=1, le=10_080),
     protocol: str | None = None,
+    agent_id: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     database: Session = Depends(get_db),
@@ -45,6 +48,6 @@ def recent_flows(
         offset=offset,
         protocol=protocol,
         seen_after=seen_after,
+        agent_id=agent_id,
     )
     return FlowPage(items=items, total=total, limit=limit, offset=offset)
-

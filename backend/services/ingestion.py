@@ -8,7 +8,7 @@ from backend.services.statistics import record_flow_statistics
 
 
 def ingest_flow_batch(
-    database: Session, request: FlowIngestRequest
+    database: Session, request: FlowIngestRequest, agent_id: str | None = None
 ) -> tuple[int, bool, list[NetworkFlow], set[str]]:
     batch_id = str(request.batch_id)
     existing_batch = database.get(IngestBatch, batch_id)
@@ -20,6 +20,7 @@ def ingest_flow_batch(
     new_host_ips: set[str] = set()
     for item in request.flows:
         flow = NetworkFlow(
+            agent_id=agent_id,
             source_ip=str(item.source_ip),
             destination_ip=str(item.destination_ip),
             source_port=item.source_port,
@@ -35,7 +36,7 @@ def ingest_flow_batch(
         )
         database.add(flow)
         stored_flows.append(flow)
-        new_host_ips.update(track_local_hosts_for_flow(database, item, host_cache))
+        new_host_ips.update(track_local_hosts_for_flow(database, item, host_cache, agent_id))
 
     record_flow_statistics(database, stored_flows)
     database.add(IngestBatch(batch_id=batch_id, flow_count=len(request.flows)))

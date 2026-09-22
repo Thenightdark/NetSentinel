@@ -28,12 +28,14 @@ class ConnectionSpikeRule:
         recent_cutoff = observed_at - timedelta(seconds=self.window_seconds)
         baseline_cutoff = recent_cutoff - timedelta(seconds=self.baseline_seconds)
         windows_in_baseline = self.baseline_seconds / self.window_seconds
+        agent_id = flows[0].agent_id
         alerts: list[AlertCandidate] = []
         for source_ip in {flow.source_ip for flow in flows}:
             recent_count = int(
                 database.scalar(
                     select(func.count()).select_from(NetworkFlow).where(
                         NetworkFlow.source_ip == source_ip,
+                        NetworkFlow.agent_id == agent_id,
                         NetworkFlow.last_seen >= recent_cutoff,
                     )
                 )
@@ -43,6 +45,7 @@ class ConnectionSpikeRule:
                 database.scalar(
                     select(func.count()).select_from(NetworkFlow).where(
                         NetworkFlow.source_ip == source_ip,
+                        NetworkFlow.agent_id == agent_id,
                         NetworkFlow.last_seen >= baseline_cutoff,
                         NetworkFlow.last_seen < recent_cutoff,
                     )

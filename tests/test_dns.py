@@ -13,7 +13,8 @@ from backend.api.dependencies import require_dashboard_user
 from backend.database.base import Base
 from backend.database.session import get_db
 from backend.main import app
-from backend.models import DNSObservation
+from backend.models import CollectorAgent, DNSObservation
+from backend.services.agents import hash_agent_key
 from backend.services.detection import (
     HighDNSQueryRateRule,
     LongDomainNameRule,
@@ -44,6 +45,9 @@ def client(database: Session, monkeypatch) -> TestClient:
     )
     app.dependency_overrides[get_db] = override_database
     app.dependency_overrides[require_dashboard_user] = lambda: object()
+    now = datetime.now(timezone.utc)
+    database.add(CollectorAgent(agent_id="22222222-2222-4222-8222-222222222222", hostname="dns-agent", operating_system="Test OS", ip_address="192.168.1.3", version="0.4.0", first_seen=now, last_seen=now, status="ONLINE", api_key_hash=hash_agent_key("dns-test-key")))
+    database.commit()
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -100,7 +104,7 @@ def test_dns_api_ingests_lists_and_aggregates_only_queries(client: TestClient) -
     }
 
     ingested = client.post(
-        "/api/ingest/dns", json=payload, headers={"X-API-Key": "dns-test-key"}
+        "/api/ingest/dns", json=payload, headers={"X-Agent-ID": "22222222-2222-4222-8222-222222222222", "X-API-Key": "dns-test-key"}
     )
     listed = client.get("/api/dns", params={"domain": "example"})
     top = client.get("/api/dns/top-domains", params={"minutes": 60})

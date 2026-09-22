@@ -22,7 +22,10 @@ class FlowIngestItem(BaseModel):
     @field_validator("protocol")
     @classmethod
     def normalize_protocol(cls, value: str) -> str:
-        return value.strip().upper()
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("protocol must contain at least one non-whitespace character")
+        return normalized
 
     @field_validator("process_name", "executable_name")
     @classmethod

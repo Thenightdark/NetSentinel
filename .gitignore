@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.ruff_cache/
 .venv/
 *.db
 
@@ -16,10 +17,11 @@ pnpm-debug.log*
 .env
 .env.local
 !.env.example
+.netsentinel/
+agent.json
 
 # Editors and operating systems
 .idea/
 .vscode/
 .DS_Store
 Thumbs.db
-

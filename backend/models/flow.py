@@ -14,6 +14,7 @@ class NetworkFlow(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     source_ip: Mapped[str] = mapped_column(String(45), index=True)
     destination_ip: Mapped[str] = mapped_column(String(45), index=True)
     source_port: Mapped[int | None] = mapped_column(Integer, nullable=True)

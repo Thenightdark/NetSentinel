@@ -9,6 +9,7 @@ import sys
 from time import sleep
 
 from .capture import CaptureUnavailable, PassivePacketCapture, available_interfaces
+from .agent import AgentClient
 from .config import CollectorConfig
 from .flows import FlowTracker, NetworkFlow
 from .ingest import DNSIngestionClient, FlowIngestionClient
@@ -105,10 +106,29 @@ def main(argv: list[str] | None = None) -> int:
 
     ingestion_client: FlowIngestionClient | None = None
     dns_ingestion_client: DNSIngestionClient | None = None
-    if config.api_key:
+    agent_client: AgentClient | None = None
+    credentials = None
+    try:
+        agent_client = AgentClient(
+            config.backend_url,
+            config.agent_enrollment_key,
+            config.agent_state_path,
+            heartbeat_interval_seconds=config.agent_heartbeat_interval_seconds,
+            timeout_seconds=config.ingest_timeout_seconds,
+        )
+        credentials = agent_client.ensure_registered()
+        agent_client.start(credentials)
+    except Exception as exc:
+        LOGGER.warning("Agent registration unavailable; local capture will continue: %s", exc)
+        if agent_client is not None:
+            agent_client.stop()
+            agent_client = None
+
+    if credentials is not None:
         ingestion_client = FlowIngestionClient(
             backend_url=config.backend_url,
-            api_key=config.api_key,
+            agent_id=credentials.agent_id,
+            api_key=credentials.api_key,
             batch_size=config.ingest_batch_size,
             flush_interval_seconds=config.ingest_flush_interval_seconds,
             timeout_seconds=config.ingest_timeout_seconds,
@@ -118,7 +138,8 @@ def main(argv: list[str] | None = None) -> int:
         ingestion_client.start()
         dns_ingestion_client = DNSIngestionClient(
             backend_url=config.backend_url,
-            api_key=config.api_key,
+            agent_id=credentials.agent_id,
+            api_key=credentials.api_key,
             batch_size=config.ingest_batch_size,
             flush_interval_seconds=config.ingest_flush_interval_seconds,
             timeout_seconds=config.ingest_timeout_seconds,
@@ -128,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
         dns_ingestion_client.start()
         LOGGER.info("Flow and DNS metadata ingestion enabled for %s", config.backend_url)
     else:
-        LOGGER.warning("NETSENTINEL_API_KEY is not set; finalized flows will only be logged")
+        LOGGER.warning("No collector identity is available; metadata will only be logged")
 
     def log_finalized_flow(flow: NetworkFlow) -> None:
         LOGGER.info("Finalized flow: %s", flow.summary())
@@ -182,6 +203,8 @@ def main(argv: list[str] | None = None) -> int:
             ingestion_client.stop()
         if dns_ingestion_client is not None:
             dns_ingestion_client.stop()
+        if agent_client is not None:
+            agent_client.stop()
         LOGGER.info("Collector summary: %s", stats.summary())
 
     return 0

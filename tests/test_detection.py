@@ -113,21 +113,26 @@ def test_unusual_destination_port_only_uses_configured_ports() -> None:
     assert alerts[0].evidence["destination_port"] == 3389
 
 
-def test_bandwidth_spike_distinguishes_outbound_and_inbound_transfers() -> None:
-    rule = BandwidthSpikeRule(outbound_bytes=2_000, inbound_bytes=3_000)
+def test_bandwidth_spike_aggregates_outbound_and_inbound_window(
+    database: Session,
+) -> None:
+    rule = BandwidthSpikeRule(threshold_bytes=2_000, window_seconds=300)
     outbound = make_flow(
         source_ip="192.168.1.10", destination_ip="8.8.8.8", size=2_500
     )
     inbound = make_flow(
-        source_ip="8.8.8.8", destination_ip="192.168.1.10", size=3_500
+        source_ip="8.8.8.8", destination_ip="192.168.1.20", size=3_500
     )
+    database.add_all([outbound, inbound])
+    database.commit()
 
-    alerts = rule.evaluate([outbound, inbound])
+    alerts = rule.evaluate(database, [outbound, inbound])
 
     assert len(alerts) == 2
     assert {alert.evidence["direction"] for alert in alerts} == {"inbound", "outbound"}
     assert all(alert.detection_name == "bandwidth_spike" for alert in alerts)
     assert all("should be reviewed in context" in alert.description for alert in alerts)
+    assert all(alert.evidence["window_seconds"] == 300 for alert in alerts)
 
 
 def test_new_host_is_informational_and_passive() -> None:
@@ -215,3 +220,88 @@ def test_risk_score_has_an_auditable_factor_breakdown(database: Session) -> None
         "previous_alert_count": 2,
         "total": 75,
     }
+
+
+def test_port_scan_does_not_trigger_one_port_below_threshold(
+    database: Session,
+) -> None:
+    now = datetime.now(timezone.utc)
+    flows = [make_flow(destination_port=port, seen_at=now) for port in (80, 443)]
+    database.add_all(flows)
+    database.commit()
+
+    assert PortScanRule(3, 30).evaluate(database, flows, now) == []
+
+
+def test_port_scan_ignores_missing_ports_and_other_agents(database: Session) -> None:
+    now = datetime.now(timezone.utc)
+    current_agent = [
+        make_flow(destination_port=80, seen_at=now),
+        make_flow(destination_port=None, seen_at=now),
+    ]
+    for flow in current_agent:
+        flow.agent_id = "agent-a"
+    other_agent = make_flow(destination_port=443, seen_at=now)
+    other_agent.agent_id = "agent-b"
+    database.add_all([*current_agent, other_agent])
+    database.commit()
+
+    assert PortScanRule(2, 30).evaluate(database, current_agent, now) == []
+
+
+def test_connection_spike_boundary_is_inclusive(database: Session) -> None:
+    now = datetime.now(timezone.utc)
+    recent = [
+        make_flow(destination_port=10_000 + index, seen_at=now)
+        for index in range(5)
+    ]
+    database.add_all(recent)
+    database.commit()
+
+    rule = ConnectionSpikeRule(
+        window_seconds=60,
+        baseline_seconds=300,
+        multiplier=3,
+        minimum_connections=5,
+    )
+    alerts = rule.evaluate(database, recent, now)
+
+    assert len(alerts) == 1
+    assert alerts[0].evidence["connections_in_window"] == 5
+
+
+def test_connection_spike_does_not_trigger_below_minimum(database: Session) -> None:
+    now = datetime.now(timezone.utc)
+    recent = [make_flow(destination_port=20_000 + index, seen_at=now) for index in range(4)]
+    database.add_all(recent)
+    database.commit()
+
+    assert ConnectionSpikeRule(60, 300, 3, 5).evaluate(database, recent, now) == []
+
+
+def test_bandwidth_boundary_is_inclusive_and_large_values_are_safe(
+    database: Session,
+) -> None:
+    threshold = 5 * 1024**4
+    flow = make_flow(
+        source_ip="192.168.1.10",
+        destination_ip="2001:4860:4860::8888",
+        size=threshold,
+    )
+    database.add(flow)
+    database.commit()
+
+    alerts = BandwidthSpikeRule(threshold, 300).evaluate(database, [flow])
+
+    assert len(alerts) == 1
+    assert alerts[0].evidence["bytes"] == threshold
+
+
+def test_bandwidth_does_not_trigger_one_byte_below_threshold(
+    database: Session,
+) -> None:
+    flow = make_flow(size=999)
+    database.add(flow)
+    database.commit()
+
+    assert BandwidthSpikeRule(1_000, 300).evaluate(database, [flow]) == []

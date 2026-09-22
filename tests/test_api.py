@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 from pydantic import SecretStr
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
@@ -12,7 +12,8 @@ from backend.database.base import Base
 from backend.database.session import get_db
 from backend.config import get_settings
 from backend.main import app
-from backend.models import Host, NetworkFlow, SecurityAlert, User
+from backend.models import CollectorAgent, Host, NetworkFlow, SecurityAlert, User
+from backend.services.agents import hash_agent_key
 from backend.services.auth import hash_password
 from backend.services.statistics import record_flow_statistics
 
@@ -103,9 +104,12 @@ def seeded_database(database: Session) -> Session:
 
 
 @pytest.fixture
-def ingest_api_key(monkeypatch) -> str:
+def ingest_api_key(monkeypatch, database: Session) -> str:
     key = "test-ingestion-key"
     monkeypatch.setattr(get_settings(), "ingest_api_key", SecretStr(key))
+    now = datetime.now(timezone.utc)
+    database.add(CollectorAgent(agent_id="11111111-1111-4111-8111-111111111111", hostname="test-agent", operating_system="Test OS", ip_address="192.168.1.2", version="0.4.0", first_seen=now, last_seen=now, status="ONLINE", api_key_hash=hash_agent_key(key)))
+    database.commit()
     return key
 
 
@@ -138,6 +142,52 @@ def test_health_endpoint(client: TestClient) -> None:
     assert response.json() == {
         "status": "ok", "service": "backend", "database": "connected"
     }
+
+
+def test_collector_registration_issues_unique_credentials_and_lists_agent(
+    client: TestClient, monkeypatch
+) -> None:
+    monkeypatch.setattr(get_settings(), "agent_enrollment_key", SecretStr("enroll-test-key"))
+    registration = {
+        "agent_id": "33333333-3333-4333-8333-333333333333",
+        "hostname": "Gaming-PC",
+        "operating_system": "Windows 11",
+        "ip_address": "192.168.1.44",
+        "version": "0.4.0",
+    }
+    enrolled = client.post(
+        "/api/agents/register",
+        headers={"X-API-Key": "enroll-test-key"},
+        json=registration,
+    )
+    assert enrolled.status_code == 201
+    api_key = enrolled.json()["api_key"]
+    assert api_key and api_key != "enroll-test-key"
+
+    heartbeat = client.post(
+        "/api/agents/heartbeat",
+        headers={"X-Agent-ID": registration["agent_id"], "X-API-Key": api_key},
+    )
+    agents = client.get("/api/agents")
+    detail = client.get(f"/api/agents/{registration['agent_id']}")
+    assert heartbeat.status_code == 200
+    assert agents.json()["items"][0]["hostname"] == "Gaming-PC"
+    assert detail.json()["status"] == "ONLINE"
+    assert client.post("/api/agents/heartbeat", headers={"X-Agent-ID": registration["agent_id"], "X-API-Key": "wrong"}).status_code == 401
+
+
+def test_flow_host_and_alert_filters_are_scoped_by_agent(
+    client: TestClient, database: Session
+) -> None:
+    now = datetime.now(timezone.utc)
+    for agent_id, suffix in (("agent-a", "10"), ("agent-b", "20")):
+        database.add(Host(agent_id=agent_id, ip_address=f"10.0.0.{suffix}", first_seen=now, last_seen=now))
+        database.add(NetworkFlow(agent_id=agent_id, source_ip=f"10.0.0.{suffix}", destination_ip="1.1.1.1", protocol="TCP", bytes=100, packet_count=1, first_seen=now, last_seen=now))
+        database.add(SecurityAlert(agent_id=agent_id, timestamp=now, severity="LOW", risk_score=20, alert_type="test", source_ip=f"10.0.0.{suffix}", description="Test signal", status="NEW"))
+    database.commit()
+    assert client.get("/api/flows", params={"agent_id": "agent-a"}).json()["total"] == 1
+    assert client.get("/api/hosts", params={"agent_id": "agent-a"}).json()["items"][0]["ip_address"] == "10.0.0.10"
+    assert client.get("/api/alerts", params={"agent_id": "agent-b"}).json()["items"][0]["source_ip"] == "10.0.0.20"
 
 
 def test_flows_support_filtering_and_pagination(
@@ -228,6 +278,49 @@ def test_alerts_can_be_filtered(client: TestClient, seeded_database: Session) ->
     assert response.json()["items"][0]["alert_type"] == "port_scan"
 
 
+def test_security_events_filter_by_host_detection_and_date(
+    client: TestClient, seeded_database: Session
+) -> None:
+    now = datetime.now(timezone.utc)
+    response = client.get(
+        "/api/alerts",
+        params={
+            "host": "192.168.1.10",
+            "alert_type": "port_scan",
+            "date_from": (now - timedelta(minutes=5)).isoformat(),
+            "date_to": (now + timedelta(minutes=5)).isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert client.get(
+        "/api/alerts", params={"host": "workstation", "alert_type": "port_scan"}
+    ).json()["total"] == 1
+    assert client.get(
+        "/api/alerts",
+        params={"date_from": now.isoformat(), "date_to": (now - timedelta(days=1)).isoformat()},
+    ).status_code == 422
+
+
+def test_security_event_detail_has_defensive_investigation_context(
+    client: TestClient, seeded_database: Session
+) -> None:
+    event_id = client.get("/api/alerts").json()["items"][0]["id"]
+    response = client.get(f"/api/alerts/{event_id}")
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["risk_score"] == 70
+    assert "proof" in body["why_flagged"].lower()
+    assert body["host"]["ip_address"] == "192.168.1.10"
+    assert body["related_flows"][0]["destination_ip"] == "198.51.100.20"
+    assert len(body["recommended_investigation_steps"]) == 3
+
+
+def test_missing_security_event_returns_404(client: TestClient) -> None:
+    assert client.get("/api/alerts/99999").status_code == 404
+
+
 def test_stats_summary_aggregates_database(
     client: TestClient, seeded_database: Session
 ) -> None:
@@ -247,9 +340,87 @@ def test_stats_summary_aggregates_database(
     }
 
 
+def test_network_map_aggregates_connections_and_groups_external_destinations(
+    client: TestClient, database: Session
+) -> None:
+    now = datetime.now(timezone.utc)
+    host = Host(ip_address="192.168.1.50", hostname="map-host", first_seen=now, last_seen=now)
+    database.add(host)
+    database.flush()
+    database.add_all(
+        [
+            NetworkFlow(
+                source_ip="192.168.1.50",
+                destination_ip=f"203.0.113.{index}",
+                source_port=50_000 + index,
+                destination_port=443,
+                protocol="TCP",
+                bytes=1_000 * index,
+                packet_count=index,
+                first_seen=now - timedelta(seconds=10),
+                last_seen=now,
+            )
+            for index in range(1, 6)
+        ]
+    )
+    database.commit()
+
+    response = client.get(
+        "/api/map", params={"minutes": 60, "max_external_nodes": 3}
+    )
+    body = response.json()
+    assert response.status_code == 200
+    assert body["aggregated_flow_groups"] == 5
+    assert any(node["host_id"] == host.id for node in body["nodes"])
+    grouped = [node for node in body["nodes"] if node["kind"] == "external_group"]
+    assert grouped[0]["grouped_destinations"] == 2
+    assert sum(edge["connections"] for edge in body["edges"]) == 5
+
+
 def test_invalid_pagination_is_rejected(client: TestClient) -> None:
     response = client.get("/api/flows", params={"limit": 500})
     assert response.status_code == 422
+
+
+def test_detection_settings_have_defaults_validate_and_persist(
+    client: TestClient,
+) -> None:
+    defaults = client.get("/api/settings/detection")
+    assert defaults.status_code == 200
+    assert {
+        key: defaults.json()[key]
+        for key in (
+            "port_scan_unique_ports",
+            "port_scan_window_seconds",
+            "bandwidth_spike_megabytes",
+            "bandwidth_spike_window_seconds",
+            "connection_spike_connections",
+            "connection_spike_window_seconds",
+        )
+    } == {
+        "port_scan_unique_ports": 25,
+        "port_scan_window_seconds": 10,
+        "bandwidth_spike_megabytes": 500,
+        "bandwidth_spike_window_seconds": 300,
+        "connection_spike_connections": 500,
+        "connection_spike_window_seconds": 60,
+    }
+
+    updated_values = {
+        "port_scan_unique_ports": 40,
+        "port_scan_window_seconds": 20,
+        "bandwidth_spike_megabytes": 750,
+        "bandwidth_spike_window_seconds": 600,
+        "connection_spike_connections": 900,
+        "connection_spike_window_seconds": 120,
+    }
+    updated = client.put("/api/settings/detection", json=updated_values)
+    assert updated.status_code == 200
+    assert all(updated.json()[key] == value for key, value in updated_values.items())
+    assert client.get("/api/settings/detection").json()["bandwidth_spike_megabytes"] == 750
+
+    invalid = {**updated_values, "port_scan_unique_ports": 1}
+    assert client.put("/api/settings/detection", json=invalid).status_code == 422
 
 
 def test_ingestion_requires_api_key(client: TestClient, ingest_api_key: str) -> None:
@@ -261,7 +432,7 @@ def test_ingestion_validates_persists_and_deduplicates_batch(
     client: TestClient, database: Session, ingest_api_key: str
 ) -> None:
     payload = ingest_payload()
-    headers = {"X-API-Key": ingest_api_key}
+    headers = {"X-Agent-ID": "11111111-1111-4111-8111-111111111111", "X-API-Key": ingest_api_key}
 
     first = client.post("/api/ingest/flows", json=payload, headers=headers)
     duplicate = client.post("/api/ingest/flows", json=payload, headers=headers)
@@ -307,7 +478,7 @@ def test_ingestion_does_not_track_public_addresses_as_local_hosts(
     response = client.post(
         "/api/ingest/flows",
         json=payload,
-        headers={"X-API-Key": ingest_api_key},
+        headers={"X-Agent-ID": "11111111-1111-4111-8111-111111111111", "X-API-Key": ingest_api_key},
     )
 
     assert response.status_code == 202
@@ -323,9 +494,79 @@ def test_ingestion_rejects_invalid_flow_times(
         payload["flows"][0]["first_seen"],
     )
     response = client.post(
-        "/api/ingest/flows", json=payload, headers={"X-API-Key": ingest_api_key}
+        "/api/ingest/flows", json=payload, headers={"X-Agent-ID": "11111111-1111-4111-8111-111111111111", "X-API-Key": ingest_api_key}
     )
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload.update({"batch_id": "not-a-uuid"}),
+        lambda payload: payload["flows"][0].update({"source_ip": "not-an-ip"}),
+        lambda payload: payload["flows"][0].update({"protocol": "   "}),
+        lambda payload: payload["flows"][0].update({"source_port": 65_536}),
+        lambda payload: payload["flows"][0].update({"bytes": -1}),
+        lambda payload: payload["flows"][0].update({"packet_count": 0}),
+    ],
+    ids=("batch-id", "ip", "protocol", "port", "bytes", "packet-count"),
+)
+def test_ingestion_rejects_malformed_data_without_database_writes(
+    client: TestClient,
+    database: Session,
+    ingest_api_key: str,
+    mutation,
+) -> None:
+    payload = ingest_payload()
+    mutation(payload)
+
+    response = client.post(
+        "/api/ingest/flows",
+        json=payload,
+        headers={
+            "X-Agent-ID": "11111111-1111-4111-8111-111111111111",
+            "X-API-Key": ingest_api_key,
+        },
+    )
+
+    assert response.status_code == 422
+    assert database.scalar(select(func.count()).select_from(NetworkFlow)) == 0
+
+
+def test_ingestion_accepts_ipv6_portless_flow_and_large_counters(
+    client: TestClient, ingest_api_key: str
+) -> None:
+    payload = ingest_payload()
+    payload["batch_id"] = "eaa21589-548d-4cb5-81c4-4d2a4e47ee73"
+    payload["flows"][0].update(
+        {
+            "source_ip": "fd00::10",
+            "destination_ip": "2001:db8::20",
+            "source_port": None,
+            "destination_port": None,
+            "protocol": "icmpv6",
+            "bytes": 5 * 1024**4,
+            "packet_count": 2**32,
+        }
+    )
+
+    response = client.post(
+        "/api/ingest/flows",
+        json=payload,
+        headers={
+            "X-Agent-ID": "11111111-1111-4111-8111-111111111111",
+            "X-API-Key": ingest_api_key,
+        },
+    )
+    stored = client.get("/api/flows").json()["items"][0]
+
+    assert response.status_code == 202
+    assert stored["source_ip"] == "fd00::10"
+    assert stored["source_port"] is None
+    assert stored["destination_port"] is None
+    assert stored["protocol"] == "ICMPV6"
+    assert stored["bytes"] == 5 * 1024**4
+    assert stored["packet_count"] == 2**32
 
 
 def test_alert_status_can_be_updated(
@@ -398,7 +639,7 @@ def test_dashboard_authentication_and_collector_key_are_separate(
     ingested = client.post(
         "/api/ingest/flows",
         json=payload,
-        headers={"X-API-Key": ingest_api_key},
+        headers={"X-Agent-ID": "11111111-1111-4111-8111-111111111111", "X-API-Key": ingest_api_key},
     )
     assert ingested.status_code == 202
     assert client.get("/api/flows", headers={"X-API-Key": ingest_api_key}).status_code == 401
@@ -432,7 +673,7 @@ def test_ingested_flows_emit_throttled_live_update(
     second_payload = ingest_payload()
     second_payload["batch_id"] = "580dcdd3-bbee-4d3a-a093-c9d1d41f162c"
     second_payload["flows"][0]["protocol"] = "udp"
-    headers = {"X-API-Key": ingest_api_key}
+    headers = {"X-Agent-ID": "11111111-1111-4111-8111-111111111111", "X-API-Key": ingest_api_key}
 
     with client.websocket_connect("/ws/live") as websocket:
         assert websocket.receive_json()["type"] == "connection.ready"

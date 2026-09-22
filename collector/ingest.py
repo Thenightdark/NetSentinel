@@ -33,6 +33,7 @@ class BatchIngestionClient(Generic[ItemT]):
     def __init__(
         self,
         backend_url: str,
+        agent_id: str,
         api_key: str,
         *,
         endpoint: str,
@@ -70,7 +71,7 @@ class BatchIngestionClient(Generic[ItemT]):
         self._thread: threading.Thread | None = None
         self._client = httpx.Client(
             base_url=backend_url.rstrip("/"),
-            headers={"X-API-Key": api_key},
+            headers={"X-Agent-ID": agent_id, "X-API-Key": api_key},
             timeout=httpx.Timeout(timeout_seconds),
             transport=transport,
         )
@@ -198,9 +199,10 @@ class BatchIngestionClient(Generic[ItemT]):
 
 
 class FlowIngestionClient(BatchIngestionClient[NetworkFlow]):
-    def __init__(self, backend_url: str, api_key: str, **kwargs: object) -> None:
+    def __init__(self, backend_url: str, agent_id: str, api_key: str, **kwargs: object) -> None:
         super().__init__(
             backend_url,
+            agent_id,
             api_key,
             endpoint="/api/ingest/flows",
             payload_key="flows",
@@ -212,9 +214,10 @@ class FlowIngestionClient(BatchIngestionClient[NetworkFlow]):
 
 
 class DNSIngestionClient(BatchIngestionClient[DNSMetadata]):
-    def __init__(self, backend_url: str, api_key: str, **kwargs: object) -> None:
+    def __init__(self, backend_url: str, agent_id: str, api_key: str, **kwargs: object) -> None:
         super().__init__(
             backend_url,
+            agent_id,
             api_key,
             endpoint="/api/ingest/dns",
             payload_key="observations",

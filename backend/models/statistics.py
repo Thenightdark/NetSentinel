@@ -34,14 +34,15 @@ class HistoricalHostMetricBucket(Base):
     __tablename__ = "historical_host_metric_buckets"
     __table_args__ = (
         UniqueConstraint(
-            "host_ip", "granularity", "bucket_start", name="uq_host_metric_bucket_time"
+            "agent_id", "host_ip", "granularity", "bucket_start", name="uq_host_metric_bucket_time"
         ),
         Index(
-            "ix_host_metric_bucket_range", "host_ip", "granularity", "bucket_start"
+            "ix_host_metric_bucket_range", "agent_id", "host_ip", "granularity", "bucket_start"
         ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     host_ip: Mapped[str] = mapped_column(String(45))
     granularity: Mapped[str] = mapped_column(String(20))
     bucket_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))

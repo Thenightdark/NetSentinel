@@ -3,6 +3,8 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .flow import NetworkFlowRead
+
 
 class AlertSeverity(str, Enum):
     INFO = "INFO"
@@ -22,6 +24,7 @@ class SecurityAlertRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    agent_id: str | None
     timestamp: datetime
     severity: AlertSeverity
     risk_score: int = Field(ge=0, le=100)
@@ -42,3 +45,21 @@ class AlertPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class SecurityEventHost(BaseModel):
+    id: int
+    ip_address: str
+    hostname: str | None
+    first_seen: datetime
+    last_seen: datetime
+    total_bytes: int
+    total_connections: int
+    is_active: bool
+
+
+class SecurityEventDetail(SecurityAlertRead):
+    why_flagged: str
+    related_flows: list[NetworkFlowRead]
+    host: SecurityEventHost | None
+    recommended_investigation_steps: list[str]

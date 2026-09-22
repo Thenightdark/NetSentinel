@@ -15,6 +15,7 @@ def list_flows(
     source_ip: str | None = None,
     destination_ip: str | None = None,
     seen_after: datetime | None = None,
+    agent_id: str | None = None,
 ) -> tuple[list[NetworkFlow], int]:
     filters = []
     if protocol:
@@ -25,6 +26,8 @@ def list_flows(
         filters.append(NetworkFlow.destination_ip == destination_ip)
     if seen_after:
         filters.append(NetworkFlow.last_seen >= seen_after)
+    if agent_id:
+        filters.append(NetworkFlow.agent_id == agent_id)
 
     query = select(NetworkFlow).where(*filters).order_by(NetworkFlow.last_seen.desc())
     count_query = select(func.count()).select_from(NetworkFlow).where(*filters)
@@ -41,6 +44,7 @@ def list_hosts(
     search: str | None = None,
     active: bool | None = None,
     active_timeout_seconds: float = 300.0,
+    agent_id: str | None = None,
 ) -> tuple[list[Host], int]:
     filters = []
     if search:
@@ -49,6 +53,8 @@ def list_hosts(
     if active is not None:
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=active_timeout_seconds)
         filters.append(Host.last_seen >= cutoff if active else Host.last_seen < cutoff)
+    if agent_id:
+        filters.append(Host.agent_id == agent_id)
     query = select(Host).where(*filters).order_by(Host.last_seen.desc())
     count_query = select(func.count()).select_from(Host).where(*filters)
     return (
@@ -65,6 +71,10 @@ def list_alerts(
     severity: str | None = None,
     status: str | None = None,
     alert_type: str | None = None,
+    agent_id: str | None = None,
+    host_ip: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
 ) -> tuple[list[SecurityAlert], int]:
     filters = []
     if severity:
@@ -73,6 +83,29 @@ def list_alerts(
         filters.append(func.lower(SecurityAlert.status) == status.lower())
     if alert_type:
         filters.append(SecurityAlert.alert_type == alert_type)
+    if agent_id:
+        filters.append(SecurityAlert.agent_id == agent_id)
+    if host_ip:
+        host_matches = select(Host.ip_address).where(
+            or_(
+                Host.ip_address == host_ip,
+                Host.hostname.ilike(f"%{host_ip}%"),
+            )
+        )
+        if agent_id:
+            host_matches = host_matches.where(Host.agent_id == agent_id)
+        filters.append(
+            or_(
+                SecurityAlert.source_ip == host_ip,
+                SecurityAlert.destination_ip == host_ip,
+                SecurityAlert.source_ip.in_(host_matches),
+                SecurityAlert.destination_ip.in_(host_matches),
+            )
+        )
+    if date_from:
+        filters.append(SecurityAlert.timestamp >= date_from)
+    if date_to:
+        filters.append(SecurityAlert.timestamp <= date_to)
     query = select(SecurityAlert).where(*filters).order_by(SecurityAlert.timestamp.desc())
     count_query = select(func.count()).select_from(SecurityAlert).where(*filters)
     return (

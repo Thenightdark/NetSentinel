@@ -15,6 +15,7 @@ router = APIRouter(prefix="/hosts", tags=["hosts"])
 def hosts(
     search: str | None = None,
     active: bool | None = None,
+    agent_id: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     database: Session = Depends(get_db),
@@ -27,6 +28,7 @@ def hosts(
         search=search,
         active=active,
         active_timeout_seconds=timeout,
+        agent_id=agent_id,
     )
     return HostPage(
         items=[serialize_host(item, timeout) for item in items],

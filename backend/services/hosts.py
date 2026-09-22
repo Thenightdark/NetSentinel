@@ -54,6 +54,7 @@ def track_local_hosts_for_flow(
     database: Session,
     item: FlowIngestItem,
     cache: dict[str, Host],
+    agent_id: str | None = None,
 ) -> set[str]:
     newly_observed: set[str] = set()
     for value in {str(item.source_ip), str(item.destination_ip)}:
@@ -61,9 +62,12 @@ def track_local_hosts_for_flow(
             continue
         host = cache.get(value)
         if host is None:
-            host = database.scalar(select(Host).where(Host.ip_address == value))
+            host = database.scalar(
+                select(Host).where(Host.ip_address == value, Host.agent_id == agent_id)
+            )
             if host is None:
                 host = Host(
+                    agent_id=agent_id,
                     ip_address=value,
                     hostname=resolve_hostname(value),
                     first_seen=item.first_seen,
@@ -93,6 +97,7 @@ def host_is_active(
 def serialize_host(host: Host, timeout_seconds: float) -> HostRead:
     return HostRead(
         id=host.id,
+        agent_id=host.agent_id,
         ip_address=host.ip_address,
         hostname=host.hostname,
         first_seen=host.first_seen,
@@ -110,6 +115,7 @@ def get_host_detail(
         NetworkFlow.source_ip == host.ip_address,
         NetworkFlow.destination_ip == host.ip_address,
     )
+    host_filter = (host_filter, NetworkFlow.agent_id == host.agent_id)
     alert_filter = or_(
         SecurityAlert.source_ip == host.ip_address,
         SecurityAlert.destination_ip == host.ip_address,
@@ -120,7 +126,7 @@ def get_host_detail(
             func.sum(NetworkFlow.bytes),
             func.count(NetworkFlow.id),
         )
-        .where(NetworkFlow.source_ip == host.ip_address)
+        .where(NetworkFlow.source_ip == host.ip_address, NetworkFlow.agent_id == host.agent_id)
         .group_by(NetworkFlow.destination_ip)
         .order_by(func.sum(NetworkFlow.bytes).desc())
         .limit(5)
@@ -131,7 +137,7 @@ def get_host_detail(
             func.sum(NetworkFlow.bytes),
             func.count(NetworkFlow.id),
         )
-        .where(host_filter)
+        .where(*host_filter)
         .group_by(NetworkFlow.protocol)
         .order_by(func.sum(NetworkFlow.bytes).desc())
         .limit(10)
@@ -144,6 +150,7 @@ def get_host_detail(
         )
         .where(
             NetworkFlow.source_ip == host.ip_address,
+            NetworkFlow.agent_id == host.agent_id,
             NetworkFlow.destination_port.is_not(None),
         )
         .group_by(NetworkFlow.destination_port)
@@ -153,7 +160,7 @@ def get_host_detail(
     recent_flows = list(
         database.scalars(
             select(NetworkFlow)
-            .where(host_filter)
+            .where(*host_filter)
             .order_by(NetworkFlow.last_seen.desc())
             .limit(10)
         )
@@ -161,7 +168,7 @@ def get_host_detail(
     recent_alerts = list(
         database.scalars(
             select(SecurityAlert)
-            .where(alert_filter)
+            .where(alert_filter, SecurityAlert.agent_id == host.agent_id)
             .order_by(SecurityAlert.timestamp.desc())
             .limit(10)
         )
@@ -169,13 +176,13 @@ def get_host_detail(
     risk_score = int(
         database.scalar(
             select(func.max(SecurityAlert.risk_score)).where(
-                alert_filter,
+                alert_filter, SecurityAlert.agent_id == host.agent_id,
                 func.upper(SecurityAlert.status) != "RESOLVED",
             )
         )
         or 0
     )
-    activity = _host_activity(database, host.ip_address)
+    activity = _host_activity(database, host.ip_address, host.agent_id)
     base = serialize_host(host, timeout_seconds)
     return HostDetail(
         **base.model_dump(),
@@ -210,19 +217,20 @@ def get_host_detail(
     )
 
 
-def _host_activity(database: Session, host_address: str) -> list[HostTimelinePoint]:
+def _host_activity(database: Session, host_address: str, agent_id: str | None) -> list[HostTimelinePoint]:
     """Read the host's bounded hourly rollups instead of scanning raw flows."""
     now = datetime.now(timezone.utc)
     current_hour = now.replace(minute=0, second=0, microsecond=0)
     first_hour = current_hour - timedelta(hours=23)
     rows = database.execute(
-        select(
+            select(
             HistoricalHostMetricBucket.bucket_start,
             HistoricalHostMetricBucket.bytes_uploaded,
             HistoricalHostMetricBucket.bytes_downloaded,
             HistoricalHostMetricBucket.flow_count,
         ).where(
             HistoricalHostMetricBucket.host_ip == host_address,
+            HistoricalHostMetricBucket.agent_id == agent_id,
             HistoricalHostMetricBucket.granularity == "hour",
             HistoricalHostMetricBucket.bucket_start >= first_hour,
         )

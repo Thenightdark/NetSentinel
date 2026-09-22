@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import os
+from pathlib import Path
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -23,7 +24,9 @@ class CollectorConfig:
     process_correlation_enabled: bool = False
     process_refresh_interval_seconds: float = 2.0
     backend_url: str = "http://localhost:8000"
-    api_key: str | None = None
+    agent_enrollment_key: str | None = None
+    agent_state_path: Path = Path.home() / ".netsentinel" / "agent.json"
+    agent_heartbeat_interval_seconds: float = 30.0
     ingest_batch_size: int = 100
     ingest_flush_interval_seconds: float = 2.0
     ingest_timeout_seconds: float = 5.0
@@ -48,7 +51,20 @@ class CollectorConfig:
                 0.1, float(os.getenv("NETSENTINEL_PROCESS_REFRESH_SECONDS", "2"))
             ),
             backend_url=os.getenv("NETSENTINEL_BACKEND_URL", "http://localhost:8000"),
-            api_key=os.getenv("NETSENTINEL_API_KEY") or None,
+            agent_enrollment_key=(
+                os.getenv("NETSENTINEL_AGENT_ENROLLMENT_KEY")
+                or os.getenv("NETSENTINEL_API_KEY")
+                or None
+            ),
+            agent_state_path=Path(
+                os.getenv(
+                    "NETSENTINEL_AGENT_STATE_PATH",
+                    str(Path.home() / ".netsentinel" / "agent.json"),
+                )
+            ).expanduser(),
+            agent_heartbeat_interval_seconds=max(
+                5.0, float(os.getenv("NETSENTINEL_AGENT_HEARTBEAT_SECONDS", "30"))
+            ),
             ingest_batch_size=max(1, int(os.getenv("NETSENTINEL_INGEST_BATCH_SIZE", "100"))),
             ingest_flush_interval_seconds=max(
                 0.1, float(os.getenv("NETSENTINEL_INGEST_FLUSH_SECONDS", "2"))

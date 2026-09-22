@@ -37,6 +37,7 @@ def test_temporary_failure_is_retried_with_same_idempotency_key() -> None:
 
     client = FlowIngestionClient(
         "http://backend.test",
+        "11111111-1111-4111-8111-111111111111",
         "secret-key",
         max_retries=2,
         retry_backoff_seconds=0,
@@ -55,6 +56,7 @@ def test_temporary_failure_is_retried_with_same_idempotency_key() -> None:
     assert first_payload["flows"][0]["process_id"] == 42
     assert first_payload["flows"][0]["process_name"] == "chrome.exe"
     assert requests[0].headers["X-API-Key"] == "secret-key"
+    assert requests[0].headers["X-Agent-ID"] == "11111111-1111-4111-8111-111111111111"
 
 
 def test_permanent_auth_failure_is_not_retried() -> None:
@@ -67,6 +69,7 @@ def test_permanent_auth_failure_is_not_retried() -> None:
 
     client = FlowIngestionClient(
         "http://backend.test",
+        "11111111-1111-4111-8111-111111111111",
         "wrong-key",
         max_retries=3,
         retry_backoff_seconds=0,
@@ -91,6 +94,7 @@ def test_background_worker_batches_finalized_flows() -> None:
 
     client = FlowIngestionClient(
         "http://backend.test",
+        "11111111-1111-4111-8111-111111111111",
         "secret-key",
         batch_size=2,
         flush_interval_seconds=0.05,
@@ -108,6 +112,7 @@ def test_background_worker_batches_finalized_flows() -> None:
 def test_full_queue_does_not_block_capture() -> None:
     client = FlowIngestionClient(
         "http://backend.test",
+        "11111111-1111-4111-8111-111111111111",
         "secret-key",
         max_queue_size=1,
         transport=httpx.MockTransport(lambda _: httpx.Response(202)),
@@ -123,6 +128,7 @@ def test_dns_metadata_uses_separate_authenticated_ingestion_contract() -> None:
     requests: list[httpx.Request] = []
     client = DNSIngestionClient(
         "http://backend.test",
+        "11111111-1111-4111-8111-111111111111",
         "secret-key",
         transport=httpx.MockTransport(
             lambda request: requests.append(request) or httpx.Response(202)
